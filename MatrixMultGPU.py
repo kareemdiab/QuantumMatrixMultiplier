@@ -71,9 +71,9 @@ class Circuit():
         print_basis_state(self.state_vec)
         return self.state_vec
     def decompose(self):
-            for layer in self.layers: 
-                layer.decompose()
-   
+        for layer in self.layers: 
+            layer.decompose()
+
     def apply_two_qubit_gate_inplace(self, gate_4x4, ctrl, target):
         """
         In-place application of a controlled 4x4 gate to qubits q0 (control) and q1 (target)
@@ -91,11 +91,14 @@ class Circuit():
         - q1: target qubit index
         """
         import cupy as cp
-        n = int(cp.log2(self.state_vec.size))
+        # n = int(cp.log2(self.state_vec.size))
+        n = int(round(cp.log2(self.state_vec.size).item()))
+
         q0 = n-1-ctrl
         q1 = n-1-target
         
         # Reshape state vector into an n-dimensional tensor with shape [2, 2, ..., 2]
+
         state_tensor = cp.reshape(self.state_vec, [2] * n)
         
         # Bring q0 (control) and q1 (target) to the last two positions.
@@ -129,7 +132,9 @@ class Circuit():
         return self.state_vec
 
     def apply_single_qubit_gate_inplace(self, gate_2x2, qubit):
-        n = int(cp.log2(self.state_vec.size))
+        # n = int(cp.log2(self.state_vec.size))
+        n = int(round(cp.log2(self.state_vec.size).item()))
+
         # Reshape state vector into an n-dimensional tensor
         state_tensor = cp.reshape(self.state_vec, [2]*n)
         # Move the target qubit axis to the last position
@@ -280,9 +285,8 @@ class Circuit():
             sqrtU = cp.asarray(sqrtU_cpu)
             self.matrix = sqrtU
             return self
-
+        
         def act(self):
-
                 self.circuit.apply_two_qubit_gate_inplace(self.matrix, self.ctrl, self.target)
 
     
@@ -393,41 +397,31 @@ class Circuit():
         def __init__(self):
             self.circuit = Circuit._active_circuit
             self.layers = []
-
+        
         def makeControlled(self, ctrls, ancillas):
             if len(ancillas) < len(ctrls)-1:
                 raise ValueError("Not enough ancillas to make this a controlled module!")
-            if isinstance(self, self.circuit.GeneralToffoli):
-                controls = ctrls.copy()
-                controls.extend(self.controls)
-                anc = ancillas.copy()
-                anc.extend(self.ancillas)
-                # print(self, controls, self.targets, anc)
-                self = self.circuit.GeneralToffoli(controls, self.targets, anc)
-                return self
-            for i, layer in enumerate(self.layers):
-                
+            print(self)
+            
+            for i, layer in enumerate(self.layers): 
                 if isinstance(layer, self.circuit.OneQubitGate):
                     U = layer.matrix
-                    self.layers[i] = self.circuit.GeneralToffoliU(ctrls, [layer.q], ancillas, U)
-                  
+                    controls = ctrls.copy()
+                    self.layers[i] = layer.circuit.GeneralToffoliU(controls, [layer.q], ancillas, U)
+                    
                 elif isinstance(layer, self.circuit.TwoQubitGate):
                     U = layer.U
+                   
                     controls = ctrls.copy()
                     controls.append((layer.q0, 1))
-                    self.layers[i] = self.circuit.GeneralToffoliU(controls, [layer.q1], ancillas, U)
-                elif isinstance(layer, self.circuit.GeneralToffoli):
+                    self.layers[i] = layer.circuit.GeneralToffoliU(controls, [layer.q1], ancillas, U)
+                elif isinstance(layer, self.circuit.Toffoli):
                     controls = ctrls.copy()
-                    controls.extend(self.controls)
-                    anc = ancillas.copy()
-                    anc.extend(self.ancillas)
-                    # print(self, controls, self.targets, anc)
-                    self.layers[i] = self.circuit.GeneralToffoli(controls, self.targets, anc)
-
+                    controls.extend([(layer.c0, 1), (layer.c1, 1)])
+                    self.layers[i] = layer.circuit.GeneralToffoli(controls, [layer.target], ancillas)
                 else: 
                     layer.makeControlled(ctrls, ancillas)
-         
-           
+  
             return self
             
         def act(self):
@@ -444,6 +438,7 @@ class Circuit():
                     print(layer, layer.ctrl, layer.target)
                 else:
                     layer.decompose()
+ 
 
         def sqrt(self, matrix):
             U_cpu = cp.asnumpy(matrix)
@@ -471,7 +466,7 @@ class Circuit():
         def __init__(self, c0, c1, target):
  
             super().__init__()
-            
+          
             self.c0 = c0
             self.c1 = c1
             self.target = target
@@ -486,6 +481,7 @@ class Circuit():
         def __init__(self, c0, c1, target, U):
  
             super().__init__()
+        
             self.U = U
             self.c0 = c0
             self.c1 = c1
@@ -521,6 +517,7 @@ class Circuit():
             """
 
             super().__init__()
+    
             n = len(controls)
             if len(ancillas) < n-2:
                 raise ValueError("Must have at least n-2 ancillas")
@@ -576,6 +573,7 @@ class Circuit():
             """
 
             super().__init__()
+
             self.U = U
             n = len(controls)
             if len(ancillas) < n-2:
@@ -641,6 +639,7 @@ class Circuit():
             self.controls = controls
             self.targets = targets
             self.ancillas = ancillas
+  
             ctrls  = [control[0] for control in controls]
             for (control, x) in self.controls: 
                 if x == 0:
@@ -667,7 +666,7 @@ class Circuit():
             state_vector: wavefunction
             """
             super().__init__()
-           
+          
             self.U = U
             self.controls = controls
             self.targets = targets
@@ -892,19 +891,27 @@ class Circuit():
 
 
 
-state_vector = binary_to_state_vector("00000100110")
+state_vector = binary_to_state_vector("000000110110")
 
 circuit = Circuit(state_vector)
 # module = circuit.GeneralToffoliU([(2, 1), (1, 1)], [0], [4], circuit.X(0))
 
 
 
-print("=======================")
-# module = circuit.GeneralToffoli([(2, 1), (1, 1)], [0], [5]).makeControlled([(3, 0), (4, 0)], [6])
-# module = circuit.GeneralToffoli([(2, 1), (1, 1), (3, 0), (4, 0)], [0], [5, 6])
-module = circuit.AS([5, 4, 3], [2, 1, 0], [7, 6]).makeControlled([(9, 0), (8, 0)], [10])
+
+module = circuit.AS([5, 4, 3], [2, 1, 0], [7, 6])
 circuit.addLayer(module)
-circuit.decompose()
+
+# module.decompose()
+
+print("=======================")
+module.makeControlled([(9, 0), (8, 0)], [10, 11])
+# module = circuit.GeneralToffoli([(2, 1), (1, 1), (3, 0), (4, 0)], [0], [5, 6])
+# module = circuit.AS([5, 4, 3], [2, 1, 0], [7, 6]).makeControlled([(9, 0), (8, 0)], [10])
+
+
+# module.decompose()
+
 
 # # gate = circuit.X(0)
 # # print(gate.sqrt(gate.matrix))
