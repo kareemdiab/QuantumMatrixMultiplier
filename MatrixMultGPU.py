@@ -36,6 +36,15 @@ def binary_to_state_vector(bin_str):
     vec = cp.zeros(2**n, dtype=cp.complex128)
     vec[index] = 1.0
     return vec
+def superposition_to_state_vector(super_str, phases):
+    n = len(super_str)
+    vec = cp.zeros(2**len(super_str[0]), dtype=cp.complex128)
+    for str, phase in zip(super_str, phases):
+        index = int(str, 2)
+        vec[index] = phase
+    vec = vec * (1/(n**(1/2)))
+    return vec
+
 
 ###########################################################
 # Helper: Print basis state if single amplitude is nonzero
@@ -53,8 +62,21 @@ def print_basis_state(vec):
         bin_str = format(index, '0{}b'.format(n))
         print(f"This state is |{bin_str}> in the computational basis.")
     else:
-        print("This is not a pure computational basis state (or multiple nonzero entries).")
-        # print(vec)
+        # print("This is not a pure computational basis state (or multiple nonzero entries).")
+        print_superposition_state(vec)
+def print_superposition_state(vec):
+ 
+    nonzeros = cp.flatnonzero(cp.abs(vec) > 1e-10).get()  # move to CPU
+    print("superposition |Psi> = ")
+    for i, state in enumerate(nonzeros): 
+        n = int(math.log2(len(vec)))
+        bin_str = format(state, '0{}b'.format(n))
+        print_a_b(bin_str)
+        print("|"+bin_str+">")
+      
+
+
+
 
 class Circuit(): 
     _active_circuit = None
@@ -401,7 +423,7 @@ class Circuit():
         def makeControlled(self, ctrls, ancillas):
             if len(ancillas) < len(ctrls)-1:
                 raise ValueError("Not enough ancillas to make this a controlled module!")
-            print(self)
+            # print(self)
             
             for i, layer in enumerate(self.layers): 
                 if isinstance(layer, self.circuit.OneQubitGate):
@@ -719,7 +741,7 @@ class Circuit():
                 T1 = self.circuit.GeneralToffoli(controls.copy(), targets.copy(), self.ancillas)
            
                 self.layers.append(T1)
-                print("T1", controls, targets, self.ancillas)
+                # print("T1", controls, targets, self.ancillas)
                 i+=1
                 # flip the first two controls
                 controls[0]= (a_i,0)
@@ -731,10 +753,10 @@ class Circuit():
                 T2= self.circuit.GeneralToffoli(controls.copy(), targets.copy(), self.ancillas)
                
                 self.layers.append(T2)
-                print("T2", controls, targets, self.ancillas)
+                # print("T2", controls, targets, self.ancillas)
                 i+=1
-            for layer in self.layers: 
-                print(layer.controls, layer.targets)
+            # for layer in self.layers: 
+            #     print(layer.controls, layer.targets)
 
     class Carry(Module):
         def __init__(self, a, b, c, d):
@@ -836,87 +858,151 @@ class Circuit():
     ###############################################################################
     # ASS class in CuPy
     ###############################################################################
-    class ASS:
-        """
-        Some bigger module that does:
-        - For i in range(len(self.inc)):
-        * Adder(self.inc[i], self.y, ...)
-        * Comparator(...)
-        * AS_00(...) 
-        We'll not finalize the logic, just rewrite to use CuPy.
-        """
-        def __init__(self, dim, state_vector, x, y, a_x, b_y, c, increment, zeros, c1, c0):
+    class ASS(Module):
+   
+   
+        def __init__(self, dim, x, y, a_x, b_y, c, increment, zeros, ancillas, c1, c0):
+            super().__init__()
             self.dim = dim
             self.x = x
             self.y = y
             self.a_x = a_x
             self.b_y = b_y
-            self.inc = increment
-            assert len(increment) == len(a_x)-1
-            self.c = c
-            self.zeros = zeros
-            self.c1 = c1
             self.c0 = c0
-            self.state_vector = state_vector
-            self.U = self.build()
+            self.c1 = c1
+            self.ancillas = ancillas
+            self.inc = increment
+            assert len(increment) == len(a_x)
+            self.layers = []
+            for i in range(len(increment)):
+                adder = self.circuit.Adder(increment[i], y, c)
+                comp = self.circuit.Comparator(x, y[:-1], zeros, ancillas, c1, c0)
+                as_controlled = self.circuit.AS(a_x, b_y,c).makeControlled([(c1, 0), (c0, 0)], [ancillas])
+                self.layers.append(adder)
+                self.layers.append(comp)
+                self.layers.append(as_controlled)
 
-        def build(self):
-            # The code snippet is incomplete in your original snippet. 
-            # We'll define 'layers', but the logic is up to you to finalize.
-            layers = []
-            for i in range(len(self.inc)):
-                # 1) Adder(...).U
-                AM_MODULE = Adder(self.inc[i], self.y, self.state_vector).U  # Possibly incomplete
-                layers.append(AM_MODULE)
-
-                # 2) Comparator(...).U
-                # comparator = Comparator(self.x, self.y, self.zeros, self.c1, self.c0, self.state_vector).U
-                # layers.append(comparator)
-
-                # 3) AS_00(...) 
-                # as_00_mod = AS_00(self.dim, [self.c1,self.c0], self.a_x, self.b_y, self.c, self.inc, self.state_vector).U
-                # layers.append(as_00_mod)
-
-                # You presumably chain them with matrix multiplications
-                # We'll not do a final reduce(...) since it's not shown
-                pass
-            # Return an identity for now, or reduce over 'layers'
-            if layers:
-                return reduce(operator.matmul, layers)
-            else:
-                return cp.eye(len(self.state_vector), dtype=cp.complex128)
-
-
-   
+        
 
 
 
-state_vector = binary_to_state_vector("000000110110")
+#"|00|10|00|000|000|000"
+def basis_state(vec):
+    """
+    Checks if 'vec' (CuPy array) has exactly one nonzero amplitude, 
+    and if so prints its index in binary.
+    """
+    # find nonzeros on GPU
+    nonzeros = cp.flatnonzero(cp.abs(vec) > 1e-10).get()  # move to CPU
+    if len(nonzeros) == 1:
+        index = nonzeros[0]
+        n = int(math.log2(len(vec)))
+        bin_str = format(index, '0{}b'.format(n))
+        return bin_str
 
+def print_a_b(bin):
+    binary = list(reversed(bin))
+    # print(binary)
+    print("a: ", list(reversed(binary[4:7])))
+    print("b: ", list(reversed(binary[0:3])))
+    print("x: ", binary[7])
+    print("y: ", binary[3])
+
+#"00----x a_0 a_1 a_2 y b_0 b_1 b_2"
+    
+#AS test
+# binary_str = "0000000000110011"
+# state_vec = binary_to_state_vector(binary_str)
+
+# circ = Circuit(state_vec)
+# circ.addLayer(circ.AS([0,1,2],[4,5,6],[8, 9]))
+# # .makeControlled([(3,0), (7,0)], [10,11])
+# state_vec = circ.run()
+
+# binary = basis_state(state_vec)
+# print_a_b(binary)
+
+#Compare x==y test:
+# binary_str = "0000000000110011"
+# state_vec = binary_to_state_vector(binary_str)
+
+# circ = Circuit(state_vec)
+# circ.addLayer(circ.Comparator([3],[7],[10,11],[12,13],14,15))
+# state_vec = circ.run()
+
+# binary = basis_state(state_vec)
+# print_a_b(binary)
+
+
+#AS only if x==y 
+# binary_str = "0000000000110011"
+# state_vec = binary_to_state_vector(binary_str)
+
+# circ = Circuit(state_vec)
+# circ.addLayer(circ.Comparator([3],[7],[10,11],[12,13],14,15))
+# circ.addLayer(circ.AS([0,1,2],[4,5,6],[8, 9]).makeControlled([(15,0),(14,0)], [12,13]))
+
+# state_vec = circ.run()
+
+# binary = basis_state(state_vec)
+# print_a_b(binary)
+
+
+
+superposition = ["00100010", "00101011", "10110010", "10111011"]
+for i in range(0, len(superposition)): 
+    superposition[i] = "00000000" + superposition[i]
+    
+
+state_vector = superposition_to_state_vector(superposition, [1, 1, 1, 1])
 circuit = Circuit(state_vector)
-# module = circuit.GeneralToffoliU([(2, 1), (1, 1)], [0], [4], circuit.X(0))
-
-
-
-
-module = circuit.AS([5, 4, 3], [2, 1, 0], [7, 6])
-circuit.addLayer(module)
-
-# module.decompose()
-
-print("=======================")
-module.makeControlled([(9, 0), (8, 0)], [10, 11])
-# module = circuit.GeneralToffoli([(2, 1), (1, 1), (3, 0), (4, 0)], [0], [5, 6])
-# module = circuit.AS([5, 4, 3], [2, 1, 0], [7, 6]).makeControlled([(9, 0), (8, 0)], [10])
-
-
-# module.decompose()
-
-
-# # gate = circuit.X(0)
-# # print(gate.sqrt(gate.matrix))
-# # print(gate.dagger(gate.sqrt(gate.matrix)))
-
+circuit.addLayer(circuit.X(3))
+circuit.addLayer(circuit.Comparator([3],[7],[10,11],[12,13],14,15))
+circuit.addLayer(circuit.AS([0,1,2],[4,5,6],[8, 9]).makeControlled([(15,0),(14,0)], [12,13]))
 
 circuit.run()
 
+
+
+
+
+
+
+
+#preparing test circuit
+
+# circuit.addLayer(circuit.H(0))
+# circuit.addLayer(circuit.H(1))
+# circuit.addLayer(circuit.H(3))
+# circuit.addLayer(circuit.H(4))
+# circuit.addLayer(circuit.CNOT(0, 6))
+# circuit.addLayer(circuit.CNOT(1, 7))
+# circuit.addLayer(circuit.CNOT(3, 9))
+# circuit.addLayer(circuit.CNOT(4, 10))
+# x=[9,10]
+# y=[6,7,8]
+
+# # #running ASS
+# #AM|1>
+# circuit.addLayer(circuit.Adder([12,11], [6,7,8], [13,14]))
+#Compare
+
+# Controlled AS
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[13,14]).makeControlled([(9,0), (10,0), (6,0),(7,0)], [12,11,15,16]))
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[13,14]).makeControlled([(9,1), (10,0), (6,1),(7,0)], [12,11,15,16]))
+
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[13,14]).makeControlled([(9,0), (10,1), (6,0),(7,1)], [12,11,15,16]))
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[13,14]).makeControlled([(9,1), (10,1), (6,1),(7,1)], [12,11,15,16]))
+
+
+# # #AM|2>
+# # #AM|1>
+# circuit.addLayer(circuit.Adder([11,12], [6,7,8], [13,14]))
+# # #Compare
+
+# # # #Controlled AS
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[15,16]).makeControlled([(9,0), (10,0), (6,0),(7,0)], [12,11,13,14]))
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[15,16]).makeControlled([(9,1), (10,0), (6,1),(7,0)], [12,11,13,14]))
+
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[15,16]).makeControlled([(9,0), (10,1), (6,0),(7,1)], [12,11,13,14]))
+# circuit.addLayer(circuit.AS([0,1,2],[3,4,5],[15,16]).makeControlled([(9,1), (10,1), (6,1),(7,1)], [12,11,13,14]))
